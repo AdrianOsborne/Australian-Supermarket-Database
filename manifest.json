@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Community Supermarket Extractor",
+  "version": "0.1.0",
+  "description": "Extract product data from Coles, Woolworths and ALDI Australia pages.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://www.coles.com.au/*",
+    "https://www.woolworths.com.au/*",
+    "https://www.aldi.com.au/*",
+    "https://your-api.example.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.coles.com.au/*",
+        "https://www.woolworths.com.au/*",
+        "https://www.aldi.com.au/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

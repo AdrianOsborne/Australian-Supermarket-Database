@@ -1,0 +1,25 @@
+body {
+  font-family: Arial, sans-serif;
+  min-width: 320px;
+  padding: 12px;
+}
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+button {
+  padding: 10px;
+  cursor: pointer;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: #f3f3f3;
+  padding: 8px;
+  border-radius: 6px;
+}
