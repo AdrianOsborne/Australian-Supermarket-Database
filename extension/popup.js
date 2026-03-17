@@ -1,30 +1,176 @@
 const ext = globalThis.browser ?? globalThis.chrome;
+const outputEl = document.getElementById("output");
+const statusLineEl = document.getElementById("statusLine");
 
-const els = {
-  body: document.body,
-  loggedOutView: document.getElementById("loggedOutView"),
-  loggedInView: document.getElementById("loggedInView"),
-  loginBtn: document.getElementById("loginBtn"),
-  logoutBtn: document.getElementById("logoutBtn"),
-  themeToggle: document.getElementById("themeToggle"),
-  autoSubmitToggle: document.getElementById("autoSubmitToggle"),
-  userLogin: document.getElementById("userLogin"),
-  output: document.getElementById("output"),
-  authHint: document.getElementById("authHint"),
-  extractBtn: document.getElementById("extractBtn"),
-  submitBtn: document.getElementById("submitBtn")
-};
+const GITHUB_CLIENT_ID = "Ov23liNl0shL2OPigKeG";
+const REPO_OWNER = "AdrianOsborne";
+const REPO_NAME = "AU-Supermarket-Backend";
+const ISSUE_TITLE_PREFIX = "[SUBMISSION]";
+const GITHUB_SCOPE = "repo";
 
-async function sendMessage(message) {
-  return await ext.runtime.sendMessage(message);
+async function getStoredAuth() {
+  return await ext.storage.local.get({
+    githubAccessToken: "",
+    githubUserLogin: ""
+  });
 }
 
-async function getState() {
-  const response = await sendMessage({ type: "GET_STATE" });
-  if (!response?.ok) {
-    throw new Error(response?.error || "Failed to get state.");
+async function setStoredAuth(accessToken, userLogin) {
+  await ext.storage.local.set({
+    githubAccessToken: accessToken,
+    githubUserLogin: userLogin
+  });
+}
+
+async function clearStoredAuth() {
+  await ext.storage.local.remove(["githubAccessToken", "githubUserLogin"]);
+}
+
+async function updateStatusLine() {
+  const auth = await getStoredAuth();
+  if (auth.githubAccessToken && auth.githubUserLogin) {
+    statusLineEl.textContent = `Signed in as ${auth.githubUserLogin}`;
+  } else {
+    statusLineEl.textContent = "Not signed in";
   }
-  return response.data;
+}
+
+async function githubApi(url, options = {}) {
+  const auth = await getStoredAuth();
+  if (!auth.githubAccessToken) {
+    throw new Error("Not signed in with GitHub.");
+  }
+
+  const headers = {
+    "Authorization": `Bearer ${auth.githubAccessToken}`,
+    "Accept": "application/vnd.github+json",
+    ...(options.headers || {})
+  };
+
+  const res = await fetch(url, {
+    ...options,
+    headers
+  });
+
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await res.json()
+    : await res.text();
+
+  if (!res.ok) {
+    const msg = typeof data === "object" && data && data.message
+      ? data.message
+      : `GitHub request failed with status ${res.status}`;
+    throw new Error(msg);
+  }
+
+  return data;
+}
+
+async function startDeviceFlow() {
+  const res = await fetch("https://github.com/login/device/code", {
+    method: "POST",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      client_id: GITHUB_CLIENT_ID,
+      scope: GITHUB_SCOPE
+    })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error_description || data.error || "Failed to start device flow.");
+  }
+
+  return data;
+}
+
+async function pollForAccessToken(deviceCode, intervalSeconds) {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, intervalSeconds * 1000));
+
+    const res = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        client_id: GITHUB_CLIENT_ID,
+        device_code: deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+      })
+    });
+
+    const data = await res.json();
+
+    if (data.access_token) {
+      return data.access_token;
+    }
+
+    if (data.error === "authorization_pending") {
+      continue;
+    }
+
+    if (data.error === "slow_down") {
+      intervalSeconds += 5;
+      continue;
+    }
+
+    throw new Error(data.error_description || data.error || "GitHub sign-in failed.");
+  }
+}
+
+async function fetchGitHubUser(accessToken) {
+  const res = await fetch("https://api.github.com/user", {
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Accept": "application/vnd.github+json"
+    }
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.message || "Failed to fetch GitHub user.");
+  }
+
+  return data;
+}
+
+async function signInWithGitHub() {
+  outputEl.textContent = "Starting GitHub sign-in...";
+
+  const device = await startDeviceFlow();
+
+  outputEl.textContent =
+    `Go to:\n${device.verification_uri}\n\n` +
+    `Then enter this code:\n${device.user_code}\n\n` +
+    `Waiting for authorization...`;
+
+  if (device.verification_uri) {
+    try {
+      await ext.tabs.create({ url: device.verification_uri });
+    } catch (e) {}
+  }
+
+  const accessToken = await pollForAccessToken(device.device_code, device.interval || 5);
+  const user = await fetchGitHubUser(accessToken);
+
+  await setStoredAuth(accessToken, user.login);
+  await updateStatusLine();
+
+  outputEl.textContent = `Signed in successfully as ${user.login}`;
+}
+
+async function signOutGitHub() {
+  await clearStoredAuth();
+  await updateStatusLine();
+  outputEl.textContent = "Signed out.";
 }
 
 async function getActiveTab() {
@@ -34,138 +180,68 @@ async function getActiveTab() {
 
 async function extractCurrentPage() {
   const tab = await getActiveTab();
-  if (!tab?.id) {
-    throw new Error("No active tab.");
+  const response = await ext.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
+
+  if (!response || !response.ok) {
+    throw new Error(response?.error || "Could not extract page.");
   }
 
-  const response = await ext.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
-  if (!response?.ok) {
-    throw new Error(response?.error || "Could not extract current page.");
-  }
   return response.data;
 }
 
-function setTheme(theme) {
-  els.body.setAttribute("data-theme", theme === "light" ? "light" : "dark");
-  els.themeToggle.textContent = theme === "light" ? "☾" : "☀";
+function formatIssueTitle(payload) {
+  return `${ISSUE_TITLE_PREFIX} ${payload.retailer} ${payload.product_id}`;
 }
 
-function showLoggedOut() {
-  els.loggedOutView.classList.remove("hidden");
-  els.loggedInView.classList.add("hidden");
-}
-
-function showLoggedIn() {
-  els.loggedOutView.classList.add("hidden");
-  els.loggedInView.classList.remove("hidden");
-}
-
-function renderOutput(value) {
-  els.output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-}
-
-function renderAuthHint(state) {
-  if (state.authStatus === "waiting_for_authorization" && state.pendingVerificationUri && state.pendingUserCode) {
-    els.authHint.textContent = `Open ${state.pendingVerificationUri} and enter code ${state.pendingUserCode}. Waiting for approval...`;
-    return;
-  }
-  els.authHint.textContent = "";
-}
-
-async function render() {
-  const state = await getState();
-  setTheme(state.theme || "dark");
-  renderAuthHint(state);
-
-  if (state.githubAccessToken && state.githubUserLogin) {
-    showLoggedIn();
-    els.userLogin.textContent = state.githubUserLogin;
-    els.autoSubmitToggle.checked = !!state.autoSubmit;
-
-    if (state.lastSubmissionResult) {
-      renderOutput(state.lastSubmissionResult);
-    } else {
-      renderOutput("Ready.");
+async function submitToGitHub(payload) {
+  return await githubApi(
+    `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/issues`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        title: formatIssueTitle(payload),
+        body: JSON.stringify(payload, null, 2)
+      })
     }
-  } else {
-    showLoggedOut();
-    renderOutput("Sign in to GitHub to submit product pages.");
-  }
+  );
 }
 
-els.themeToggle.addEventListener("click", async () => {
+document.getElementById("loginBtn").addEventListener("click", async () => {
   try {
-    const state = await getState();
-    const nextTheme = state.theme === "light" ? "dark" : "light";
-    const response = await sendMessage({ type: "SET_THEME", theme: nextTheme });
-    if (!response?.ok) throw new Error(response?.error || "Failed to set theme.");
-    await render();
+    await signInWithGitHub();
   } catch (e) {
-    renderOutput(String(e));
+    outputEl.textContent = String(e);
   }
 });
 
-els.loginBtn.addEventListener("click", async () => {
+document.getElementById("logoutBtn").addEventListener("click", async () => {
   try {
-    els.authHint.textContent = "Starting GitHub sign in...";
-    renderOutput("Starting GitHub sign in...");
-    const response = await sendMessage({ type: "START_GITHUB_LOGIN" });
-    if (!response?.ok) throw new Error(response?.error || "GitHub sign in failed.");
-    renderOutput(`Signed in successfully as ${response.data.login}`);
-    await render();
+    await signOutGitHub();
   } catch (e) {
-    renderOutput(String(e));
-    await render();
+    outputEl.textContent = String(e);
   }
 });
 
-els.logoutBtn.addEventListener("click", async () => {
-  try {
-    const response = await sendMessage({ type: "SIGN_OUT" });
-    if (!response?.ok) throw new Error(response?.error || "Sign out failed.");
-    await render();
-  } catch (e) {
-    renderOutput(String(e));
-  }
-});
-
-els.autoSubmitToggle.addEventListener("change", async () => {
-  try {
-    const response = await sendMessage({ type: "SET_AUTO_SUBMIT", value: els.autoSubmitToggle.checked });
-    if (!response?.ok) throw new Error(response?.error || "Failed to save automatic submission setting.");
-    await render();
-  } catch (e) {
-    renderOutput(String(e));
-  }
-});
-
-els.extractBtn.addEventListener("click", async () => {
+document.getElementById("extractBtn").addEventListener("click", async () => {
   try {
     const payload = await extractCurrentPage();
-    renderOutput(payload);
+    outputEl.textContent = JSON.stringify(payload, null, 2);
   } catch (e) {
-    renderOutput(String(e));
+    outputEl.textContent = String(e);
   }
 });
 
-els.submitBtn.addEventListener("click", async () => {
+document.getElementById("submitBtn").addEventListener("click", async () => {
   try {
     const payload = await extractCurrentPage();
-    const response = await sendMessage({ type: "SUBMIT_PAYLOAD", payload });
-    if (!response?.ok) throw new Error(response?.error || "Submit failed.");
-    renderOutput({
-      message: "Submitted successfully.",
-      issueUrl: response.data.html_url
-    });
+    const result = await submitToGitHub(payload);
+    outputEl.textContent = `Submitted successfully.\n\nIssue: ${result.html_url}`;
   } catch (e) {
-    renderOutput(String(e));
+    outputEl.textContent = String(e);
   }
 });
 
-ext.storage.onChanged.addListener(() => {
-  render().catch(() => {});
-});
-
-render().catch((e) => {
-  renderOutput(String(e));
-});
+updateStatusLine();

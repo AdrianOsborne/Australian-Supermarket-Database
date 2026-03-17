@@ -1,21 +1,27 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
   "name": "Australian Supermarket Database",
-  "version": "2.1.0",
-  "description": "Extract and automatically submit supermarket product pages.",
-  "permissions": ["storage", "tabs", "notifications"],
-  "host_permissions": [
+  "version": "2.0.1",
+  "description": "Extract and submit supermarket product pages.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "notifications",
     "https://www.coles.com.au/*",
     "https://www.woolworths.com.au/*",
     "https://www.aldi.com.au/*",
     "https://api.github.com/*",
     "https://github.com/*"
   ],
-  "action": {
-    "default_popup": "popup.html"
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "Australian Supermarket Database"
   },
   "background": {
-    "service_worker": "background.js"
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
   },
   "content_scripts": [
     {
@@ -24,7 +30,9 @@
         "https://www.woolworths.com.au/*",
         "https://www.aldi.com.au/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
