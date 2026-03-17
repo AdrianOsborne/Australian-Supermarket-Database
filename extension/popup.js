@@ -2,7 +2,7 @@ const ext = globalThis.browser ?? globalThis.chrome;
 const outputEl = document.getElementById("output");
 const statusLineEl = document.getElementById("statusLine");
 
-const GITHUB_CLIENT_ID = "REPLACE_WITH_YOUR_GITHUB_OAUTH_APP_CLIENT_ID";
+const GITHUB_CLIENT_ID = "Ov23liNl0shL2OPigKeG";
 const REPO_OWNER = "AdrianOsborne";
 const REPO_NAME = "AU-Supermarket-Backend";
 const ISSUE_TITLE_PREFIX = "[SUBMISSION]";
