@@ -392,8 +392,14 @@ function extractPayload() {
     ], "src");
 
     price = price ?? parsePriceFromSelectors([
+      'span.price__value[data-testid="pricing"][aria-label^="Price "]',
+      'span.price__value[data-testid="product-buy"][aria-label^="Price "]',
+      '[data-testid="pricing"][aria-label^="Price "]',
+      '[data-testid="product-buy"][aria-label^="Price "]',
       '[data-testid="pricing"] [aria-label^="Price "]',
       '[data-testid="product-buy"] [aria-label^="Price "]',
+      'span.price__value[data-testid="pricing"]',
+      'span.price__value[data-testid="product-buy"]',
       '[data-testid="pricing"] .price .price_value',
       '[data-testid="product-buy"] .price .price_value',
       '[data-testid="pricing"] [class*="price_value"]',
