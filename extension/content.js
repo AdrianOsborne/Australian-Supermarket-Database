@@ -1,3 +1,5 @@
+const ext = globalThis.browser ?? globalThis.chrome;
+
 function cleanText(v) {
   if (!v) return null;
   return String(v).replace(/\s+/g, " ").trim() || null;
@@ -140,11 +142,11 @@ function extractPayload() {
     },
     raw_html: document.documentElement.outerHTML,
     captured_at: new Date().toISOString(),
-    extension_version: chrome.runtime.getManifest().version
+    extension_version: ext.runtime.getManifest().version
   };
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "EXTRACT_PAGE") {
     try {
       const payload = extractPayload();
