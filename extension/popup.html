@@ -3,46 +3,60 @@
 <head>
   <meta charset="utf-8">
   <title>Australian Supermarket Database</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      min-width: 360px;
-      padding: 12px;
-    }
-
-    button {
-      width: 100%;
-      margin-top: 10px;
-      padding: 10px;
-      cursor: pointer;
-    }
-
-    pre {
-      margin-top: 10px;
-      background: #f3f3f3;
-      padding: 10px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-    }
-
-    .muted {
-      color: #666;
-      font-size: 12px;
-      margin-top: 8px;
-    }
-  </style>
+  <link rel="stylesheet" href="popup.css">
 </head>
-<body>
-  <h2>Australian Supermarket Database</h2>
+<body data-theme="dark">
+  <div class="app">
+    <div class="topbar">
+      <div>
+        <h1>Australian Supermarket Database</h1>
+        <p class="subtitle">Supermarket extractor and submitter</p>
+      </div>
+      <button id="themeToggle" class="icon-btn" title="Toggle theme">☀</button>
+    </div>
 
-  <button id="loginBtn">Sign in with GitHub</button>
-  <button id="logoutBtn">Sign out</button>
-  <button id="extractBtn">Extract current page</button>
-  <button id="submitBtn">Submit current page</button>
+    <div id="loggedOutView" class="card hidden">
+      <h2>Sign in required</h2>
+      <p>You need to sign in with GitHub before using this extension.</p>
+      <button id="loginBtn" class="primary-btn">Sign in with GitHub</button>
+      <div id="authHint" class="hint"></div>
+    </div>
 
-  <div class="muted" id="statusLine">Checking login status...</div>
-  <pre id="output"></pre>
+    <div id="loggedInView" class="hidden">
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="label">Signed in as</div>
+            <div id="userLogin" class="value"></div>
+          </div>
+          <button id="logoutBtn" class="secondary-btn">Sign out</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row switch-row">
+          <div>
+            <div class="label">Automatic submission</div>
+            <div class="hint">Auto extracts and submits supported product pages</div>
+          </div>
+          <label class="switch">
+            <input id="autoSubmitToggle" type="checkbox">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card button-stack">
+        <button id="extractBtn" class="secondary-btn">Extract current page</button>
+        <button id="submitBtn" class="primary-btn">Submit current page</button>
+      </div>
+
+      <div class="card">
+        <div class="label">Status</div>
+        <pre id="output"></pre>
+      </div>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>
