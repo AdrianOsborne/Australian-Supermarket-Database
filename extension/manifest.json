@@ -1,21 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Australian Supermarket Database",
-  "version": "1.0.1",
-  "description": "Extract product data from Coles, Woolworths and ALDI Australia pages and submit it.",
+  "version": "1.1.0",
+  "description": "Extract product data from Coles, Woolworths and ALDI Australia pages and submit it to GitHub.",
   "permissions": ["activeTab", "storage", "tabs"],
   "host_permissions": [
     "https://www.coles.com.au/*",
     "https://www.woolworths.com.au/*",
     "https://www.aldi.com.au/*",
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "https://github.com/*"
   ],
   "action": {
     "default_popup": "popup.html"
-  },
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
   },
   "content_scripts": [
     {
@@ -27,5 +24,10 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "australian-supermarket-database@adrianosborne"
+    }
+  }
 }
