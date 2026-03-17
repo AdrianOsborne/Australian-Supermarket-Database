@@ -1,187 +1,86 @@
 const ext = globalThis.browser ?? globalThis.chrome;
+
+const bodyEl = document.body;
+const themeToggleEl = document.getElementById("themeToggle");
+
+const loggedOutViewEl = document.getElementById("loggedOutView");
+const loggedInViewEl = document.getElementById("loggedInView");
+
+const loginBtnEl = document.getElementById("loginBtn");
+const logoutBtnEl = document.getElementById("logoutBtn");
+
+const userLoginEl = document.getElementById("userLogin");
+const authHintEl = document.getElementById("authHint");
+const deviceFlowBoxEl = document.getElementById("deviceFlowBox");
+const deviceCodeEl = document.getElementById("deviceCode");
+const deviceFlowUrlEl = document.getElementById("deviceFlowUrl");
+const copyCodeBtnEl = document.getElementById("copyCodeBtn");
+const openGithubBtnEl = document.getElementById("openGithubBtn");
+
+const autoSubmitToggleEl = document.getElementById("autoSubmitToggle");
+
+const extractBtnEl = document.getElementById("extractBtn");
+const submitBtnEl = document.getElementById("submitBtn");
+
 const outputEl = document.getElementById("output");
-const statusLineEl = document.getElementById("statusLine");
+const outputLoggedOutEl = document.getElementById("outputLoggedOut");
 
-const GITHUB_CLIENT_ID = "Ov23liNl0shL2OPigKeG";
-const REPO_OWNER = "AdrianOsborne";
-const REPO_NAME = "AU-Supermarket-Backend";
-const ISSUE_TITLE_PREFIX = "[SUBMISSION]";
-const GITHUB_SCOPE = "repo";
-
-async function getStoredAuth() {
-  return await ext.storage.local.get({
-    githubAccessToken: "",
-    githubUserLogin: ""
-  });
+async function sendRuntimeMessage(message) {
+  return await ext.runtime.sendMessage(message);
 }
 
-async function setStoredAuth(accessToken, userLogin) {
-  await ext.storage.local.set({
-    githubAccessToken: accessToken,
-    githubUserLogin: userLogin
-  });
-}
-
-async function clearStoredAuth() {
-  await ext.storage.local.remove(["githubAccessToken", "githubUserLogin"]);
-}
-
-async function updateStatusLine() {
-  const auth = await getStoredAuth();
-  if (auth.githubAccessToken && auth.githubUserLogin) {
-    statusLineEl.textContent = `Signed in as ${auth.githubUserLogin}`;
-  } else {
-    statusLineEl.textContent = "Not signed in";
+async function getState() {
+  const res = await sendRuntimeMessage({ type: "GET_STATE" });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Failed to get state.");
   }
+  return res.data;
 }
 
-async function githubApi(url, options = {}) {
-  const auth = await getStoredAuth();
-  if (!auth.githubAccessToken) {
-    throw new Error("Not signed in with GitHub.");
+async function setTheme(theme) {
+  const res = await sendRuntimeMessage({ type: "SET_THEME", theme });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Failed to set theme.");
   }
-
-  const headers = {
-    "Authorization": `Bearer ${auth.githubAccessToken}`,
-    "Accept": "application/vnd.github+json",
-    ...(options.headers || {})
-  };
-
-  const res = await fetch(url, {
-    ...options,
-    headers
-  });
-
-  const contentType = res.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await res.json()
-    : await res.text();
-
-  if (!res.ok) {
-    const msg = typeof data === "object" && data && data.message
-      ? data.message
-      : `GitHub request failed with status ${res.status}`;
-    throw new Error(msg);
-  }
-
-  return data;
+  return res.data;
 }
 
-async function startDeviceFlow() {
-  const res = await fetch("https://github.com/login/device/code", {
-    method: "POST",
-    headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: new URLSearchParams({
-      client_id: GITHUB_CLIENT_ID,
-      scope: GITHUB_SCOPE
-    })
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data.error_description || data.error || "Failed to start device flow.");
+async function setAutoSubmit(value) {
+  const res = await sendRuntimeMessage({ type: "SET_AUTO_SUBMIT", value });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Failed to set auto submit.");
   }
-
-  return data;
+  return res.data;
 }
 
-async function pollForAccessToken(deviceCode, intervalSeconds) {
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, intervalSeconds * 1000));
-
-    const res = await fetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        client_id: GITHUB_CLIENT_ID,
-        device_code: deviceCode,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-      })
-    });
-
-    const data = await res.json();
-
-    if (data.access_token) {
-      return data.access_token;
-    }
-
-    if (data.error === "authorization_pending") {
-      continue;
-    }
-
-    if (data.error === "slow_down") {
-      intervalSeconds += 5;
-      continue;
-    }
-
-    throw new Error(data.error_description || data.error || "GitHub sign-in failed.");
+async function startLogin() {
+  const res = await sendRuntimeMessage({ type: "START_GITHUB_LOGIN" });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Login failed.");
   }
+  return res.data;
 }
 
-async function fetchGitHubUser(accessToken) {
-  const res = await fetch("https://api.github.com/user", {
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Accept": "application/vnd.github+json"
-    }
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data.message || "Failed to fetch GitHub user.");
+async function signOut() {
+  const res = await sendRuntimeMessage({ type: "SIGN_OUT" });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Sign out failed.");
   }
-
-  return data;
-}
-
-async function signInWithGitHub() {
-  outputEl.textContent = "Starting GitHub sign-in...";
-
-  const device = await startDeviceFlow();
-
-  outputEl.textContent =
-    `Go to:\n${device.verification_uri}\n\n` +
-    `Then enter this code:\n${device.user_code}\n\n` +
-    `Waiting for authorization...`;
-
-  if (device.verification_uri) {
-    try {
-      await ext.tabs.create({ url: device.verification_uri });
-    } catch (e) {}
-  }
-
-  const accessToken = await pollForAccessToken(device.device_code, device.interval || 5);
-  const user = await fetchGitHubUser(accessToken);
-
-  await setStoredAuth(accessToken, user.login);
-  await updateStatusLine();
-
-  outputEl.textContent = `Signed in successfully as ${user.login}`;
-}
-
-async function signOutGitHub() {
-  await clearStoredAuth();
-  await updateStatusLine();
-  outputEl.textContent = "Signed out.";
+  return res.data;
 }
 
 async function getActiveTab() {
   const tabs = await ext.tabs.query({ active: true, currentWindow: true });
-  return tabs[0];
+  return tabs && tabs[0] ? tabs[0] : null;
 }
 
 async function extractCurrentPage() {
   const tab = await getActiveTab();
-  const response = await ext.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
+  if (!tab || typeof tab.id === "undefined") {
+    throw new Error("No active tab found.");
+  }
 
+  const response = await ext.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
   if (!response || !response.ok) {
     throw new Error(response?.error || "Could not extract page.");
   }
@@ -189,59 +88,197 @@ async function extractCurrentPage() {
   return response.data;
 }
 
-function formatIssueTitle(payload) {
-  return `${ISSUE_TITLE_PREFIX} ${payload.retailer} ${payload.product_id}`;
+async function submitPayload(payload) {
+  const res = await sendRuntimeMessage({ type: "SUBMIT_PAYLOAD", payload });
+  if (!res?.ok) {
+    throw new Error(res?.error || "Submit failed.");
+  }
+  return res.data;
 }
 
-async function submitToGitHub(payload) {
-  return await githubApi(
-    `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/issues`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        title: formatIssueTitle(payload),
-        body: JSON.stringify(payload, null, 2)
-      })
-    }
-  );
+function setOutput(text, loggedOut = false) {
+  if (loggedOut) {
+    outputLoggedOutEl.textContent = text || "";
+    outputLoggedOutEl.classList.toggle("hidden", !text);
+    return;
+  }
+
+  outputEl.textContent = text || "";
 }
 
-document.getElementById("loginBtn").addEventListener("click", async () => {
+function applyTheme(theme) {
+  const nextTheme = theme === "light" ? "light" : "dark";
+  bodyEl.setAttribute("data-theme", nextTheme);
+  themeToggleEl.textContent = nextTheme === "light" ? "☾" : "☀";
+  themeToggleEl.title = nextTheme === "light" ? "Switch to dark mode" : "Switch to light mode";
+}
+
+async function copyText(text) {
   try {
-    await signInWithGitHub();
+    await navigator.clipboard.writeText(text);
+    return true;
   } catch (e) {
-    outputEl.textContent = String(e);
+    return false;
+  }
+}
+
+function renderDeviceFlow(state) {
+  const show = state.authStatus === "waiting_for_authorization" && !!state.pendingUserCode;
+
+  deviceFlowBoxEl.classList.toggle("hidden", !show);
+
+  if (!show) {
+    deviceCodeEl.textContent = "......";
+    deviceFlowUrlEl.textContent = "";
+    authHintEl.classList.add("hidden");
+    authHintEl.textContent = "";
+    return;
+  }
+
+  deviceCodeEl.textContent = state.pendingUserCode || "";
+  deviceFlowUrlEl.textContent = state.pendingVerificationUri
+    ? `Open ${state.pendingVerificationUri} and paste the code above.`
+    : "Open GitHub device activation and paste the code above.";
+
+  authHintEl.textContent = "GitHub is waiting for you to enter the code.";
+  authHintEl.classList.remove("hidden");
+}
+
+function setLoggedInUi(state) {
+  const signedIn = !!(state.githubAccessToken && state.githubUserLogin);
+
+  loggedOutViewEl.classList.toggle("hidden", signedIn);
+  loggedInViewEl.classList.toggle("hidden", !signedIn);
+
+  applyTheme(state.theme || "dark");
+
+  if (!signedIn) {
+    renderDeviceFlow(state);
+    return;
+  }
+
+  userLoginEl.textContent = state.githubUserLogin || "";
+  autoSubmitToggleEl.checked = state.autoSubmit !== false;
+
+  deviceFlowBoxEl.classList.add("hidden");
+  authHintEl.classList.add("hidden");
+  authHintEl.textContent = "";
+}
+
+async function refreshUi() {
+  const state = await getState();
+  setLoggedInUi(state);
+
+  if (state.lastSubmissionResult?.issueUrl) {
+    setOutput(`Last submitted:\n${state.lastSubmissionResult.issueUrl}`);
+  } else if (!outputEl.textContent.trim()) {
+    setOutput("Waiting.");
+  }
+}
+
+themeToggleEl.addEventListener("click", async () => {
+  try {
+    const state = await getState();
+    const nextTheme = state.theme === "light" ? "dark" : "light";
+    await setTheme(nextTheme);
+    await refreshUi();
+  } catch (e) {
+    setOutput(String(e && e.message ? e.message : e));
   }
 });
 
-document.getElementById("logoutBtn").addEventListener("click", async () => {
+loginBtnEl.addEventListener("click", async () => {
   try {
-    await signOutGitHub();
+    setOutput("Starting GitHub sign in...", true);
+
+    startLogin().catch(err => {
+      setOutput(String(err && err.message ? err.message : err), true);
+      refreshUi().catch(() => {});
+    });
+
+    setTimeout(() => {
+      refreshUi().catch(() => {});
+    }, 300);
+
+    const poll = setInterval(async () => {
+      try {
+        const state = await getState();
+        setLoggedInUi(state);
+
+        if (state.githubAccessToken && state.githubUserLogin) {
+          clearInterval(poll);
+          setOutput(`Signed in as ${state.githubUserLogin}`);
+          await refreshUi();
+          return;
+        }
+
+        if (state.authStatus === "signed_out" && !state.pendingUserCode) {
+          clearInterval(poll);
+          await refreshUi();
+        }
+      } catch (e) {
+        clearInterval(poll);
+      }
+    }, 1500);
   } catch (e) {
-    outputEl.textContent = String(e);
+    setOutput(String(e && e.message ? e.message : e), true);
   }
 });
 
-document.getElementById("extractBtn").addEventListener("click", async () => {
+logoutBtnEl.addEventListener("click", async () => {
+  try {
+    await signOut();
+    await refreshUi();
+    setOutput("Signed out.");
+  } catch (e) {
+    setOutput(String(e && e.message ? e.message : e));
+  }
+});
+
+copyCodeBtnEl.addEventListener("click", async () => {
+  const state = await getState();
+  const code = state.pendingUserCode || "";
+  if (!code) return;
+
+  const ok = await copyText(code);
+  setOutput(ok ? "Code copied to clipboard." : "Could not copy code automatically.", true);
+});
+
+openGithubBtnEl.addEventListener("click", async () => {
+  const state = await getState();
+  const url = state.pendingVerificationUri || "https://github.com/login/device";
+  await ext.tabs.create({ url });
+});
+
+autoSubmitToggleEl.addEventListener("change", async () => {
+  try {
+    await setAutoSubmit(autoSubmitToggleEl.checked);
+    setOutput(autoSubmitToggleEl.checked ? "Auto submit enabled." : "Auto submit disabled.");
+  } catch (e) {
+    setOutput(String(e && e.message ? e.message : e));
+  }
+});
+
+extractBtnEl.addEventListener("click", async () => {
   try {
     const payload = await extractCurrentPage();
-    outputEl.textContent = JSON.stringify(payload, null, 2);
+    setOutput(JSON.stringify(payload, null, 2));
   } catch (e) {
-    outputEl.textContent = String(e);
+    setOutput(String(e && e.message ? e.message : e));
   }
 });
 
-document.getElementById("submitBtn").addEventListener("click", async () => {
+submitBtnEl.addEventListener("click", async () => {
   try {
     const payload = await extractCurrentPage();
-    const result = await submitToGitHub(payload);
-    outputEl.textContent = `Submitted successfully.\n\nIssue: ${result.html_url}`;
+    const result = await submitPayload(payload);
+    setOutput(`Submitted successfully.\n\nIssue: ${result.html_url}`);
+    await refreshUi();
   } catch (e) {
-    outputEl.textContent = String(e);
+    setOutput(String(e && e.message ? e.message : e));
   }
 });
 
-updateStatusLine();
+refreshUi().catch(err => {
+  setOutput(String(err && err.message ? err.message : err));
+});

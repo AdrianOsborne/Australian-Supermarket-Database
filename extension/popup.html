@@ -17,9 +17,22 @@
 
     <div id="loggedOutView" class="card hidden">
       <h2>Sign in required</h2>
-      <p>You need to sign in with GitHub before using this extension.</p>
+      <p>You need to sign in with GitHub before using submissions.</p>
+
       <button id="loginBtn" class="primary-btn">Sign in with GitHub</button>
-      <div id="authHint" class="hint"></div>
+
+      <div id="deviceFlowBox" class="device-box hidden">
+        <div class="label">GitHub activation code</div>
+        <div id="deviceCode" class="device-code">......</div>
+        <div class="button-row">
+          <button id="copyCodeBtn" class="secondary-btn">Copy code</button>
+          <button id="openGithubBtn" class="secondary-btn">Open GitHub</button>
+        </div>
+        <div id="deviceFlowUrl" class="hint"></div>
+      </div>
+
+      <div id="authHint" class="hint hidden"></div>
+      <pre id="outputLoggedOut" class="output hidden"></pre>
     </div>
 
     <div id="loggedInView" class="hidden">
@@ -40,7 +53,7 @@
             <div class="hint">Auto extracts and submits supported product pages</div>
           </div>
           <label class="switch">
-            <input id="autoSubmitToggle" type="checkbox">
+            <input id="autoSubmitToggle" type="checkbox" checked>
             <span class="slider"></span>
           </label>
         </div>
@@ -53,7 +66,7 @@
 
       <div class="card">
         <div class="label">Status</div>
-        <pre id="output"></pre>
+        <pre id="output" class="output">Waiting.</pre>
       </div>
     </div>
   </div>
