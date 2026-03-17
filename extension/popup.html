@@ -4,15 +4,44 @@
   <meta charset="utf-8">
   <title>Australian Supermarket Database</title>
   <style>
-    body { font-family: Arial, sans-serif; min-width: 340px; padding: 12px; }
-    button { width: 100%; margin-top: 10px; padding: 10px; }
-    pre { margin-top: 10px; background: #f3f3f3; padding: 10px; white-space: pre-wrap; word-break: break-word; }
+    body {
+      font-family: Arial, sans-serif;
+      min-width: 360px;
+      padding: 12px;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      cursor: pointer;
+    }
+
+    pre {
+      margin-top: 10px;
+      background: #f3f3f3;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+    }
+
+    .muted {
+      color: #666;
+      font-size: 12px;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
   <h2>Australian Supermarket Database</h2>
+
+  <button id="loginBtn">Sign in with GitHub</button>
+  <button id="logoutBtn">Sign out</button>
   <button id="extractBtn">Extract current page</button>
   <button id="submitBtn">Submit current page</button>
+
+  <div class="muted" id="statusLine">Checking login status...</div>
   <pre id="output"></pre>
 
   <script src="popup.js"></script>
