@@ -1,10 +1,12 @@
+const ext = globalThis.browser ?? globalThis.chrome;
+
 const githubTokenEl = document.getElementById("githubToken");
 const repoOwnerEl = document.getElementById("repoOwner");
 const repoNameEl = document.getElementById("repoName");
 const statusEl = document.getElementById("status");
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get({
+  const data = await ext.storage.local.get({
     githubToken: "",
     repoOwner: "AdrianOsborne",
     repoName: "AU-Supermarket-Backend"
@@ -16,7 +18,7 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  await chrome.storage.local.set({
+  await ext.storage.local.set({
     githubToken: githubTokenEl.value.trim(),
     repoOwner: repoOwnerEl.value.trim(),
     repoName: repoNameEl.value.trim()
