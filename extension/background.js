@@ -1,10 +1,10 @@
 const ext = globalThis.browser ?? globalThis.chrome;
 
 const GITHUB_CLIENT_ID = "Ov23liNl0shL2OPigKeG";
-const SUBMISSION_REPO_OWNER = "AdrianOsborne";
-const SUBMISSION_REPO_NAME = "AU-Supermarket-Backend";
+const SUBMISSION_REPO_OWNER = "au-supermarket-database";
+const SUBMISSION_REPO_NAME = "au-supermarket-database.github.io";
 const ISSUE_TITLE_PREFIX = "[SUBMISSION]";
-const GITHUB_SCOPE = "repo";
+const GITHUB_SCOPE = "public_repo";
 
 const DEFAULT_STATE = {
   githubAccessToken: "",
