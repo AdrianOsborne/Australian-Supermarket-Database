@@ -27,7 +27,8 @@
       "matches": [
         "https://www.coles.com.au/*",
         "https://www.woolworths.com.au/*",
-        "https://www.aldi.com.au/*"
+        "https://www.aldi.com.au/*",
+        "https://github.com/login/device*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

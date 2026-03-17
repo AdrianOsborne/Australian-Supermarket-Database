@@ -7,10 +7,22 @@ const MIN_KEY = "au_supermarket_overlay_minimized";
 let overlayRoot = null;
 let lastHandledUrl = "";
 let lastAutoAttemptSignature = "";
+let lastSeenExtractedSignature = "";
+let bootTimer = null;
+let mutationObserver = null;
 
 function cleanText(v) {
   if (!v) return null;
   return String(v).replace(/\s+/g, " ").trim() || null;
+}
+
+function htmlEscape(v) {
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function getRetailer() {
@@ -21,6 +33,15 @@ function getRetailer() {
   if (host === "www.aldi.com.au" || host === "aldi.com.au") return "aldi";
 
   return null;
+}
+
+function isGitHubDevicePage() {
+  try {
+    const url = new URL(location.href);
+    return url.hostname === "github.com" && url.pathname === "/login/device";
+  } catch {
+    return false;
+  }
 }
 
 function getProductId(retailer, urlString) {
@@ -63,32 +84,54 @@ function isSupportedProductPage() {
   const retailer = getRetailer();
   if (!retailer) return false;
 
-  const url = location.href;
+  const pathname = new URL(location.href).pathname;
 
   if (retailer === "woolworths") {
-    return /\/shop\/productdetails\/\d+/i.test(new URL(url).pathname);
+    return /\/shop\/productdetails\/\d+/i.test(pathname);
   }
 
   if (retailer === "coles") {
-    return /\/product\/.+/i.test(new URL(url).pathname);
+    return /\/product\/.+/i.test(pathname);
   }
 
   if (retailer === "aldi") {
-    return /\/product\/.+/i.test(new URL(url).pathname);
+    return /\/product\/.+/i.test(pathname);
   }
 
   return false;
 }
 
+function shouldShowOverlay() {
+  return isSupportedProductPage() || isGitHubDevicePage();
+}
+
 function firstText(selectors) {
   for (const selector of selectors) {
     const el = document.querySelector(selector);
-    if (el) {
-      const txt = cleanText(el.textContent);
-      if (txt) return txt;
-    }
+    if (!el) continue;
+    const txt = cleanText(el.textContent);
+    if (txt) return txt;
   }
   return null;
+}
+
+function firstAttr(selectors, attr = "src") {
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (!el) continue;
+    const val = cleanText(el.getAttribute(attr));
+    if (val) return val;
+  }
+  return null;
+}
+
+function absoluteUrlMaybe(v) {
+  if (!v) return null;
+  try {
+    return new URL(v, location.href).href;
+  } catch {
+    return v;
+  }
 }
 
 function parseJsonLdProduct() {
@@ -115,33 +158,161 @@ function parseJsonLdProduct() {
   return null;
 }
 
-function parseNutritionTable() {
-  const tables = Array.from(document.querySelectorAll("table"));
-
-  for (const table of tables) {
-    const txt = (table.innerText || "").toLowerCase();
-    if (!["energy", "protein", "fat", "carbohydrate", "sodium"].some(word => txt.includes(word))) {
-      continue;
-    }
-
-    const rows = [];
-    for (const tr of table.querySelectorAll("tr")) {
-      const cells = Array.from(tr.querySelectorAll("th,td"))
-        .map(x => cleanText(x.textContent))
-        .filter(Boolean);
-      if (cells.length) rows.push(cells);
-    }
-
-    if (rows.length) return rows;
-  }
-
-  return null;
-}
-
 function parsePriceFromPageText() {
   const txt = document.body.innerText || "";
   const m = txt.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
   return m ? Number(m[1]) : null;
+}
+
+function parsePriceValue(text) {
+  const value = cleanText(text);
+  if (!value) return null;
+
+  const labelMatch = value.match(/price\s+\$?\s*(\d+(?:\.\d{1,2})?)/i);
+  if (labelMatch) return Number(labelMatch[1]);
+
+  const currencyMatch = value.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
+  if (currencyMatch) return Number(currencyMatch[1]);
+
+  const plainMatch = value.match(/\b(\d+(?:\.\d{1,2})?)\b/);
+  return plainMatch ? Number(plainMatch[1]) : null;
+}
+
+function parsePriceFromSelectors(selectors, attr) {
+  for (const selector of selectors) {
+    const nodes = document.querySelectorAll(selector);
+    for (const node of nodes) {
+      const raw = attr ? node.getAttribute(attr) : node.textContent;
+      const parsed = parsePriceValue(raw);
+      if (parsed !== null && !Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function splitNameAndMeasurement(text) {
+  const value = cleanText(text);
+  if (!value) {
+    return {
+      productName: null,
+      measurement: null
+    };
+  }
+
+  const m = value.match(/(.+?)\s+(\d+(?:\.\d+)?\s?(?:kg|g|mg|l|ml|each|pack))$/i);
+  if (!m) {
+    return {
+      productName: value,
+      measurement: null
+    };
+  }
+
+  return {
+    productName: cleanText(m[1]),
+    measurement: cleanText(m[2])
+  };
+}
+
+function parsePackAmount(productName) {
+  const value = cleanText(productName);
+  if (!value) return null;
+
+  const m =
+    value.match(/(\d+)\s*pack\b/i) ||
+    value.match(/\bpack of\s*(\d+)\b/i) ||
+    value.match(/\b(\d+)\s*x\b/i) ||
+    value.match(/\b(\d+)\s*pk\b/i);
+
+  return m ? m[1] : null;
+}
+
+function normalizeBrandAndName(retailer, brandText, fullNameText) {
+  let brand = cleanText(brandText);
+  let fullName = cleanText(fullNameText);
+
+  if (!brand && !fullName) {
+    return {
+      brand: null,
+      productName: null
+    };
+  }
+
+  if (retailer === "aldi") {
+    return {
+      brand: brand || null,
+      productName: fullName || null
+    };
+  }
+
+  if (retailer === "coles") {
+    if (!brand && fullName) {
+      const parts = fullName.split(/\s+/);
+      brand = parts.slice(0, 2).join(" ");
+    }
+
+    if (brand && fullName) {
+      const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      fullName = cleanText(fullName.replace(new RegExp(`^${escaped}\\s+`, "i"), ""));
+    }
+
+    return {
+      brand: brand || null,
+      productName: fullName || null
+    };
+  }
+
+  if (retailer === "woolworths") {
+    if (!brand && fullName) {
+      const parts = fullName.split(/\s+/);
+      brand = parts[0] || null;
+    }
+
+    if (brand && fullName) {
+      const escaped = brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const trimmed = cleanText(fullName.replace(new RegExp(`^${escaped}\\s+`, "i"), ""));
+      return {
+        brand,
+        productName: trimmed || fullName
+      };
+    }
+
+    return {
+      brand: brand || null,
+      productName: fullName || null
+    };
+  }
+
+  return {
+    brand: brand || null,
+    productName: fullName || null
+  };
+}
+
+function buildCompactRawHtml(data) {
+  return `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${htmlEscape(data.title || "")}</title>
+</head>
+<body>
+  <div data-retailer="${htmlEscape(data.retailer || "")}">
+    <div data-product-id="${htmlEscape(data.product_id || "")}"></div>
+    <div data-url="${htmlEscape(data.url || "")}"></div>
+    <div data-brand="${htmlEscape(data.parsed?.brand || "")}"></div>
+    <div data-product="${htmlEscape(data.parsed?.product || "")}"></div>
+    <div data-size="${htmlEscape(data.parsed?.size || "")}"></div>
+    <div data-pack-amount="${htmlEscape(data.parsed?.pack_amount || "")}"></div>
+    <div data-measurement="${htmlEscape(data.parsed?.measurement || "")}"></div>
+    <div data-price="${htmlEscape(data.parsed?.price ?? "")}"></div>
+    <img src="${htmlEscape(data.parsed?.image_url || "")}" alt="${htmlEscape(data.parsed?.product || "")}">
+  </div>
+</body>
+</html>
+  `.trim();
 }
 
 function extractPayload() {
@@ -150,19 +321,24 @@ function extractPayload() {
   const productId = getProductId(retailer, url);
   const jsonLd = parseJsonLdProduct();
 
-  let brand = null;
-  let product = null;
-  let size = null;
+  if (!retailer) {
+    throw new Error("Unsupported retailer.");
+  }
+
+  if (!productId) {
+    throw new Error("Could not determine product_id from this page URL.");
+  }
+
+  let brandText = null;
+  let fullNameText = null;
+  let measurement = null;
   let price = null;
+  let imageUrl = null;
 
   if (jsonLd && typeof jsonLd === "object") {
-    brand = jsonLd.brand;
-    if (brand && typeof brand === "object") {
-      brand = brand.name || null;
-    }
-
-    product = jsonLd.name || null;
-    size = jsonLd.size || jsonLd.weight || null;
+    brandText = typeof jsonLd.brand === "object" ? jsonLd.brand?.name : jsonLd.brand || null;
+    fullNameText = jsonLd.name || null;
+    measurement = jsonLd.size || jsonLd.weight || null;
 
     if (jsonLd.offers && typeof jsonLd.offers === "object" && jsonLd.offers.price) {
       const parsed = Number(jsonLd.offers.price);
@@ -170,44 +346,112 @@ function extractPayload() {
         price = parsed;
       }
     }
+
+    if (typeof jsonLd.image === "string") {
+      imageUrl = jsonLd.image;
+    } else if (Array.isArray(jsonLd.image) && jsonLd.image.length) {
+      imageUrl = jsonLd.image[0];
+    }
+  }
+
+  if (retailer === "aldi") {
+    brandText = brandText || firstText([
+      'a[href*="/brand/"]',
+      '[class*="brand"]',
+      '[class*="Brand"]'
+    ]);
+
+    fullNameText = fullNameText || firstText([
+      "h1",
+      '[class*="product-title"]',
+      '[class*="ProductTitle"]'
+    ]);
+
+    imageUrl = imageUrl || firstAttr([
+      'img[alt][src*="product"]',
+      "main img[src]",
+      ".swiper img[src]"
+    ], "src");
+  }
+
+  if (retailer === "coles") {
+    brandText = brandText || firstText([
+      'a[href*="/brand/"]',
+      '[data-testid="product-brand"]',
+      '[class*="brand"]'
+    ]);
+
+    fullNameText = fullNameText || firstText([
+      "h1"
+    ]);
+
+    imageUrl = imageUrl || firstAttr([
+      'img[src*="productimages"]',
+      "main img[src]",
+      '[class*="image"] img[src]'
+    ], "src");
+
+    price = price ?? parsePriceFromSelectors([
+      '[data-testid="pricing"] [aria-label^="Price "]',
+      '[data-testid="product-buy"] [aria-label^="Price "]',
+      '[data-testid="pricing"] .price .price_value',
+      '[data-testid="product-buy"] .price .price_value',
+      '[data-testid="pricing"] [class*="price_value"]',
+      '[data-testid="product-buy"] [class*="price_value"]'
+    ], null);
   }
 
   if (retailer === "woolworths") {
-    brand = brand || firstText(['[data-testid="brand"]', '[class*="brand"]']);
-    product = product || firstText(["h1"]);
-    size = size || firstText(['[data-testid="package-size"]', '[class*="size"]']);
-  } else if (retailer === "coles") {
-    brand = brand || firstText(['[data-testid="product-brand"]', '[class*="brand"]']);
-    product = product || firstText(["h1"]);
-    size = size || firstText(['[data-testid="product-size"]', '[class*="size"]']);
-  } else if (retailer === "aldi") {
-    brand = brand || firstText(['[class*="brand"]']);
-    product = product || firstText(["h1"]);
-    size = size || firstText(['[class*="size"]']);
+    fullNameText = fullNameText || firstText([
+      "h1",
+      '[data-testid="product-title"]'
+    ]);
+
+    imageUrl = imageUrl || firstAttr([
+      'img[src*="cdn0.woolworths.media"]',
+      "main img[src]",
+      '[data-testid="product-image"] img[src]'
+    ], "src");
   }
 
+  const normalized = normalizeBrandAndName(retailer, brandText, fullNameText);
+  const split = splitNameAndMeasurement(normalized.productName || fullNameText || "");
+
+  let finalMeasurement = cleanText(measurement) || split.measurement;
+  let finalProductName = split.productName || normalized.productName || cleanText(fullNameText);
+  let packAmount = parsePackAmount(finalProductName);
   price = price ?? parsePriceFromPageText();
+  imageUrl = absoluteUrlMaybe(imageUrl);
 
-  if (!productId) {
-    throw new Error("Could not determine product_id from this page URL.");
+  if (!finalProductName) {
+    throw new Error("Could not determine product name.");
   }
 
-  return {
+  const payload = {
     retailer,
     product_id: String(productId),
     url,
     title: document.title,
     parsed: {
-      brand: cleanText(brand),
-      product: cleanText(product),
-      size: cleanText(size),
+      brand: cleanText(normalized.brand),
+      product: cleanText(finalProductName),
+      size: cleanText(finalMeasurement),
+      pack_amount: cleanText(packAmount),
+      measurement: cleanText(finalMeasurement),
       price,
-      nutrition: parseNutritionTable()
+      image_url: imageUrl
     },
-    raw_html: document.documentElement.outerHTML,
     captured_at: new Date().toISOString(),
     extension_version: ext.runtime.getManifest().version
   };
+
+  payload.raw_html = buildCompactRawHtml(payload);
+
+  if (!payload.raw_html || payload.raw_html.length < 100) {
+    throw new Error("Compact snapshot was too small.");
+  }
+
+  return payload;
 }
 
 async function sendRuntimeMessage(message) {
@@ -419,9 +663,9 @@ function ensureStyle() {
 
     #${OVERLAY_ID} .au-status {
       margin-top: 10px;
+      height: 140px;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 180px;
       overflow: auto;
       padding: 10px;
       border-radius: 12px;
@@ -506,13 +750,37 @@ function ensureStyle() {
       display: none !important;
     }
 
-    #${OVERLAY_ID}.au-collapsed .au-body {
-      display: none;
+    #${OVERLAY_ID}.au-collapsed .au-card {
+      width: auto;
+      padding: 0;
+      border: 0;
+      background: transparent !important;
+      box-shadow: none;
+      backdrop-filter: none;
     }
 
-    #${OVERLAY_ID}.au-collapsed .au-card {
-      width: 220px;
-      padding-bottom: 10px;
+    #${OVERLAY_ID}.au-collapsed .au-top {
+      margin: 0;
+    }
+
+    #${OVERLAY_ID}.au-collapsed .au-title-wrap,
+    #${OVERLAY_ID}.au-collapsed .au-body,
+    #${OVERLAY_ID}.au-collapsed #auThemeBtn {
+      display: none !important;
+    }
+
+    #${OVERLAY_ID}.au-collapsed .au-top-actions {
+      gap: 0;
+    }
+
+    #${OVERLAY_ID}.au-collapsed #auMinBtn {
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.28);
+      background: linear-gradient(135deg, #2b7cff, #6a5cff);
+      color: white;
+      font-size: 24px;
     }
   `;
   document.documentElement.appendChild(style);
@@ -528,7 +796,7 @@ function ensureOverlay() {
     root.innerHTML = `
       <div class="au-card">
         <div class="au-top">
-          <div>
+          <div class="au-title-wrap">
             <div class="au-title">Australian Supermarket Database</div>
             <div class="au-subtitle">Automatic page extractor</div>
           </div>
@@ -608,7 +876,7 @@ function setOverlayTheme(theme) {
 
 function applyMinimizedState() {
   ensureOverlay();
-  const minimized = isMinimized();
+  const minimized = isGitHubDevicePage() ? false : isMinimized();
   overlayRoot.classList.toggle("au-collapsed", minimized);
 
   const btn = overlayRoot.querySelector("#auMinBtn");
@@ -656,7 +924,7 @@ function renderDeviceFlow(state) {
 }
 
 async function renderOverlay() {
-  if (!isSupportedProductPage()) {
+  if (!shouldShowOverlay()) {
     if (overlayRoot) {
       overlayRoot.remove();
       overlayRoot = null;
@@ -681,11 +949,20 @@ async function renderOverlay() {
   const manualActions = overlayRoot.querySelector("#auManualActions");
   const copyCodeBtn = overlayRoot.querySelector("#auCopyCodeBtn");
   const openGithubBtn = overlayRoot.querySelector("#auOpenGithubBtn");
+  const loginHintEl = overlayRoot.querySelector("#auLoggedOutView .au-hint");
 
   const signedIn = !!(state.githubAccessToken && state.githubUserLogin);
 
   loggedOutView.classList.toggle("au-hidden", signedIn);
   loggedInView.classList.toggle("au-hidden", !signedIn);
+
+  if (loginHintEl) {
+    if (isGitHubDevicePage()) {
+      loginHintEl.textContent = "Use the code below on this GitHub page to finish signing in.";
+    } else {
+      loginHintEl.textContent = "Sign in with GitHub to submit product pages automatically.";
+    }
+  }
 
   renderDeviceFlow(state);
 
@@ -772,6 +1049,7 @@ async function renderOverlay() {
       await setAutoSubmit(autoToggle.checked);
       await renderOverlay();
       setStatus(autoToggle.checked ? "Auto submit enabled." : "Auto submit disabled.");
+      scheduleBoot(50);
     } catch (e) {
       setStatus(String(e && e.message ? e.message : e));
     }
@@ -801,7 +1079,18 @@ async function handleAutomaticFlow() {
   if (!isSupportedProductPage()) return;
 
   const payload = extractPayload();
-  const signature = `${payload.url}|${payload.product_id}|${payload.parsed?.price ?? ""}`;
+  const signature = JSON.stringify({
+    retailer: payload.retailer,
+    product_id: payload.product_id,
+    url: payload.url,
+    brand: payload.parsed?.brand,
+    product: payload.parsed?.product,
+    size: payload.parsed?.size,
+    pack_amount: payload.parsed?.pack_amount,
+    measurement: payload.parsed?.measurement,
+    price: payload.parsed?.price,
+    image_url: payload.parsed?.image_url
+  });
 
   if (signature === lastAutoAttemptSignature) return;
   lastAutoAttemptSignature = signature;
@@ -817,12 +1106,27 @@ async function handleAutomaticFlow() {
   }
 
   try {
-    setStatus(`Extracted product page.\nRetailer: ${payload.retailer}\nProduct ID: ${payload.product_id}\nSubmitting automatically...`);
+    setStatus(
+      `Submitting automatically...
+Retailer: ${payload.retailer}
+Product ID: ${payload.product_id}
+Brand: ${payload.parsed?.brand || ""}
+Product: ${payload.parsed?.product || ""}
+Pack amount: ${payload.parsed?.pack_amount || ""}
+Measurement: ${payload.parsed?.measurement || ""}
+Price: ${payload.parsed?.price ?? ""}
+Image: ${payload.parsed?.image_url || ""}`
+    );
+
     const result = await tryAutoSubmit(payload);
 
     if (result?.skipped) {
       if (result.reason === "already_submitted_recently") {
         setStatus("Already submitted recently for this page.");
+      } else if (result.reason === "submission_in_progress") {
+        setStatus("A submission is already in progress for this page.");
+      } else if (result.reason === "cooldown_active") {
+        setStatus("Recently submitted. Cooldown is still active for this page.");
       } else if (result.reason === "not_signed_in") {
         setStatus("Not signed in.");
       } else if (result.reason === "auto_submit_disabled") {
@@ -839,12 +1143,67 @@ async function handleAutomaticFlow() {
   }
 }
 
-async function bootForCurrentPage() {
-  if (location.href === lastHandledUrl && overlayRoot) return;
-  lastHandledUrl = location.href;
-  lastAutoAttemptSignature = "";
+async function bootForCurrentPage(force = false) {
+  const currentUrl = location.href;
+  const urlChanged = currentUrl !== lastHandledUrl;
+
+  if (!shouldShowOverlay()) {
+    lastHandledUrl = currentUrl;
+    lastAutoAttemptSignature = "";
+    lastSeenExtractedSignature = "";
+    if (overlayRoot) {
+      overlayRoot.remove();
+      overlayRoot = null;
+    }
+    return;
+  }
+
+  if (urlChanged) {
+    lastHandledUrl = currentUrl;
+    lastAutoAttemptSignature = "";
+    lastSeenExtractedSignature = "";
+  }
+
   await renderOverlay();
+
+  if (!isSupportedProductPage()) {
+    return;
+  }
+
+  let payload;
+  try {
+    payload = extractPayload();
+  } catch (error) {
+    setStatus(String(error && error.message ? error.message : error));
+    return;
+  }
+
+  const extractedSignature = JSON.stringify({
+    retailer: payload.retailer,
+    product_id: payload.product_id,
+    url: payload.url,
+    brand: payload.parsed?.brand,
+    product: payload.parsed?.product,
+    size: payload.parsed?.size,
+    pack_amount: payload.parsed?.pack_amount,
+    measurement: payload.parsed?.measurement,
+    price: payload.parsed?.price,
+    image_url: payload.parsed?.image_url
+  });
+
+  if (!urlChanged && extractedSignature === lastSeenExtractedSignature) {
+    return;
+  }
+
+  lastSeenExtractedSignature = extractedSignature;
   await handleAutomaticFlow();
+}
+
+function scheduleBoot(delay = 300) {
+  if (bootTimer) clearTimeout(bootTimer);
+  bootTimer = setTimeout(() => {
+    bootForCurrentPage().catch(console.error);
+  }, delay);
 }
 
 function installSpaUrlWatcher() {
@@ -853,18 +1212,41 @@ function installSpaUrlWatcher() {
 
   history.pushState = function () {
     const result = origPushState.apply(this, arguments);
-    queueMicrotask(() => bootForCurrentPage().catch(console.error));
+    scheduleBoot(300);
     return result;
   };
 
   history.replaceState = function () {
     const result = origReplaceState.apply(this, arguments);
-    queueMicrotask(() => bootForCurrentPage().catch(console.error));
+    scheduleBoot(300);
     return result;
   };
 
   window.addEventListener("popstate", () => {
-    bootForCurrentPage().catch(console.error);
+    scheduleBoot(300);
+  });
+
+  let href = location.href;
+  setInterval(() => {
+    if (location.href !== href) {
+      href = location.href;
+      scheduleBoot(300);
+    }
+  }, 500);
+}
+
+function installDomWatcher() {
+  if (mutationObserver) return;
+
+  mutationObserver = new MutationObserver(() => {
+    if (isSupportedProductPage()) {
+      scheduleBoot(300);
+    }
+  });
+
+  mutationObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true
   });
 }
 
@@ -881,8 +1263,12 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 installSpaUrlWatcher();
+installDomWatcher();
+
 window.addEventListener("load", () => {
-  bootForCurrentPage().catch(console.error);
+  scheduleBoot(0);
 });
-setTimeout(() => bootForCurrentPage().catch(console.error), 700);
-setTimeout(() => bootForCurrentPage().catch(console.error), 2000);
+
+setTimeout(() => scheduleBoot(200), 200);
+setTimeout(() => scheduleBoot(1000), 1000);
+setTimeout(() => scheduleBoot(2500), 2500);

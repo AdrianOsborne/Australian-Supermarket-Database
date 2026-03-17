@@ -1,8 +1,8 @@
 const ext = globalThis.browser ?? globalThis.chrome;
 
 const GITHUB_CLIENT_ID = "Ov23liNl0shL2OPigKeG";
-const REPO_OWNER = "AdrianOsborne";
-const REPO_NAME = "AU-Supermarket-Backend";
+const SUBMISSION_REPO_OWNER = "AdrianOsborne";
+const SUBMISSION_REPO_NAME = "AU-Supermarket-Backend";
 const ISSUE_TITLE_PREFIX = "[SUBMISSION]";
 const GITHUB_SCOPE = "repo";
 
@@ -15,6 +15,8 @@ const DEFAULT_STATE = {
   pendingUserCode: "",
   pendingVerificationUri: "",
   lastSubmittedByUrl: {},
+  pendingSubmissionKeys: {},
+  cooldownUntilByUrl: {},
   lastSubmissionResult: null
 };
 
@@ -66,20 +68,21 @@ async function githubApi(url, options = {}) {
     headers
   });
 
-  const contentType = res.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await res.json()
-    : await res.text();
+  const text = await res.text();
+
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {}
 
   if (!res.ok) {
-    const msg =
-      typeof data === "object" && data && data.message
-        ? data.message
-        : `GitHub request failed with status ${res.status}`;
+    const msg = data?.message
+      ? `${data.message}${data?.errors ? `\n${JSON.stringify(data.errors, null, 2)}` : ""}`
+      : `GitHub request failed with status ${res.status}\n${text}`;
     throw new Error(msg);
   }
 
-  return data;
+  return data ?? text;
 }
 
 async function startDeviceFlow() {
@@ -154,13 +157,40 @@ async function fetchGitHubUser(accessToken) {
     }
   });
 
-  const data = await res.json();
+  const text = await res.text();
+
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {}
 
   if (!res.ok) {
-    throw new Error(data.message || "Failed to fetch GitHub user.");
+    throw new Error(data?.message || `Failed to fetch GitHub user.\n${text}`);
   }
 
   return data;
+}
+
+async function checkExistingAuth() {
+  const state = await getState();
+
+  if (!state.githubAccessToken) {
+    await setState({
+      authStatus: "signed_out",
+      githubUserLogin: ""
+    });
+    return;
+  }
+
+  try {
+    const user = await fetchGitHubUser(state.githubAccessToken);
+    await setState({
+      githubUserLogin: user.login,
+      authStatus: "signed_in"
+    });
+  } catch {
+    await clearAuth();
+  }
 }
 
 async function signInWithGitHub() {
@@ -217,21 +247,46 @@ function formatIssueTitle(payload) {
 }
 
 async function submitPayload(payload) {
-  const issue = await githubApi(
-    `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/issues`,
+  const state = await getState();
+
+  if (!state.githubAccessToken) {
+    throw new Error("Not signed in with GitHub.");
+  }
+
+  const bodyText = JSON.stringify(payload, null, 2);
+
+  const res = await fetch(
+    `https://api.github.com/repos/${SUBMISSION_REPO_OWNER}/${SUBMISSION_REPO_NAME}/issues`,
     {
       method: "POST",
       headers: {
+        "Authorization": `Bearer ${state.githubAccessToken}`,
+        "Accept": "application/vnd.github+json",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
         title: formatIssueTitle(payload),
-        body: JSON.stringify(payload, null, 2)
+        body: bodyText
       })
     }
   );
 
-  return issue;
+  const text = await res.text();
+
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {}
+
+  if (!res.ok) {
+    throw new Error(
+      data?.message
+        ? `${data.message}${data?.errors ? `\n${JSON.stringify(data.errors, null, 2)}` : ""}`
+        : `GitHub submit failed: ${res.status}\n${text}`
+    );
+  }
+
+  return data;
 }
 
 function getSubmissionSignature(payload) {
@@ -242,11 +297,16 @@ function getSubmissionSignature(payload) {
     brand: payload?.parsed?.brand || "",
     product: payload?.parsed?.product || "",
     size: payload?.parsed?.size || "",
-    price: payload?.parsed?.price ?? null
+    pack_amount: payload?.parsed?.pack_amount || "",
+    measurement: payload?.parsed?.measurement || "",
+    price: payload?.parsed?.price ?? null,
+    image_url: payload?.parsed?.image_url || ""
   });
 }
 
 async function maybeAutoSubmit(payload) {
+  const now = Date.now();
+  const cooldownMs = 2 * 60 * 1000;
   const state = await getState();
 
   if (!state.githubAccessToken) {
@@ -262,48 +322,83 @@ async function maybeAutoSubmit(payload) {
   }
 
   const lastSubmittedByUrl = state.lastSubmittedByUrl || {};
+  const cooldownUntilByUrl = state.cooldownUntilByUrl || {};
+  const pendingSubmissionKeys = state.pendingSubmissionKeys || {};
   const key = payload.url;
   const signature = getSubmissionSignature(payload);
+  const pendingKey = `${key}::${signature}`;
+
+  if (pendingSubmissionKeys[pendingKey]) {
+    return { skipped: true, reason: "submission_in_progress" };
+  }
+
+  if ((cooldownUntilByUrl[key] || 0) > now) {
+    return { skipped: true, reason: "cooldown_active" };
+  }
 
   if (lastSubmittedByUrl[key] === signature) {
     return { skipped: true, reason: "already_submitted_recently" };
   }
 
-  const result = await submitPayload(payload);
-  lastSubmittedByUrl[key] = signature;
-
-  await setState({
-    lastSubmittedByUrl,
-    lastSubmissionResult: {
-      ok: true,
-      url: payload.url,
-      issueUrl: result.html_url,
-      submittedAt: new Date().toISOString(),
-      retailer: payload.retailer,
-      productId: payload.product_id
-    }
-  });
+  pendingSubmissionKeys[pendingKey] = true;
+  await setState({ pendingSubmissionKeys });
 
   try {
-    await ext.notifications.create({
-      type: "basic",
-      title: "Australian Supermarket Database",
-      message: `Submitted ${payload.retailer} ${payload.product_id}`
-    });
-  } catch (e) {}
+    const result = await submitPayload(payload);
+    lastSubmittedByUrl[key] = signature;
+    cooldownUntilByUrl[key] = now + cooldownMs;
+    delete pendingSubmissionKeys[pendingKey];
 
-  return {
-    skipped: false,
-    issueUrl: result.html_url
-  };
+    await setState({
+      lastSubmittedByUrl,
+      cooldownUntilByUrl,
+      pendingSubmissionKeys,
+      lastSubmissionResult: {
+        ok: true,
+        url: payload.url,
+        issueUrl: result.html_url,
+        submittedAt: new Date().toISOString(),
+        retailer: payload.retailer,
+        productId: payload.product_id
+      }
+    });
+
+    try {
+      await ext.notifications.create({
+        type: "basic",
+        title: "Australian Supermarket Database",
+        message: `Submitted ${payload.retailer} ${payload.product_id}`
+      });
+    } catch {}
+
+    return {
+      skipped: false,
+      issueUrl: result.html_url
+    };
+  } catch (error) {
+    delete pendingSubmissionKeys[pendingKey];
+    await setState({ pendingSubmissionKeys });
+    throw error;
+  }
 }
+
+checkExistingAuth().catch(console.error);
 
 ext.runtime.onInstalled.addListener(async () => {
   const state = await getState();
+
   await setState({
     theme: state.theme || "dark",
-    autoSubmit: typeof state.autoSubmit === "boolean" ? state.autoSubmit : true
+    autoSubmit: typeof state.autoSubmit === "boolean" ? state.autoSubmit : true,
+    pendingSubmissionKeys: state.pendingSubmissionKeys || {},
+    cooldownUntilByUrl: state.cooldownUntilByUrl || {}
   });
+
+  await checkExistingAuth();
+});
+
+ext.runtime.onStartup?.addListener(() => {
+  checkExistingAuth().catch(console.error);
 });
 
 ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -341,6 +436,7 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg?.type === "SUBMIT_PAYLOAD") {
         const issue = await submitPayload(msg.payload);
+
         await setState({
           lastSubmissionResult: {
             ok: true,
@@ -351,6 +447,7 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             productId: msg.payload?.product_id || ""
           }
         });
+
         sendResponse({ ok: true, data: issue });
         return;
       }
