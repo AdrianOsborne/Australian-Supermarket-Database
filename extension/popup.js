@@ -1,13 +1,14 @@
+const ext = globalThis.browser ?? globalThis.chrome;
 const outputEl = document.getElementById("output");
 
 async function getActiveTab() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await ext.tabs.query({ active: true, currentWindow: true });
   return tabs[0];
 }
 
 async function extractCurrentPage() {
   const tab = await getActiveTab();
-  const response = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
+  const response = await ext.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" });
   if (!response || !response.ok) {
     throw new Error(response?.error || "Could not extract page");
   }
@@ -15,7 +16,7 @@ async function extractCurrentPage() {
 }
 
 async function getSettings() {
-  return await chrome.storage.local.get({
+  return await ext.storage.local.get({
     githubToken: "",
     repoOwner: "AdrianOsborne",
     repoName: "AU-Supermarket-Backend"
