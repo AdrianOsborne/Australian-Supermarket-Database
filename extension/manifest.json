@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Australian Supermarket Database",
-  "version": "2.0.0",
-  "description": "Extract and submit supermarket product pages.",
+  "version": "2.1.0",
+  "description": "Extract and automatically submit supermarket product pages.",
   "permissions": ["storage", "tabs", "notifications"],
   "host_permissions": [
     "https://www.coles.com.au/*",
